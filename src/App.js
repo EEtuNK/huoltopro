@@ -27,11 +27,10 @@ const db = getFirestore(app);
 
 const TECHS = ['Matti Meikäläinen', 'Pekka Päällikkö', 'Juho Asentaja'];
 
-// Apufunktio viikon päivien hakemiseen
 function getWeekDays(startDateStr) {
   const start = new Date(startDateStr);
   const day = start.getDay();
-  const diff = start.getDate() - day + (day === 0 ? -6 : 1); // Maanantai
+  const diff = start.getDate() - day + (day === 0 ? -6 : 1);
   const monday = new Date(start.setDate(diff));
   
   const days = [];
@@ -54,10 +53,10 @@ export default function App() {
   const [activeTimer, setActiveTimer] = useState(null);
   const [saldoHours, setSaldoHours] = useState(12.5);
 
-  // Modalit (Aloitus / Lopetus / PDF-Esikatselu)
+  // Modalit
   const [startModalOrder, setStartModalOrder] = useState(null);
   const [stopModalOrder, setStopModalOrder] = useState(null);
-  const [pdfOrder, setPdfOrder] = useState(null); // Avaa työmääräyksen PDF-tulostukseen
+  const [pdfOrder, setPdfOrder] = useState(null);
 
   // Formit
   const [workType, setWorkType] = useState('Kenttätyö');
@@ -77,12 +76,13 @@ export default function App() {
   const [newDesc, setNewDesc] = useState('');
   const [newAssignedTo, setNewAssignedTo] = useState('Matti Meikäläinen');
   const [newScheduleDate, setNewScheduleDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newIsWarranty, setNewIsWarranty] = useState(false);
 
-  // Viikkokalenteri (Valittu maanantai/viikko)
+  // Viikkokalenteri
   const [selectedWeekDate, setSelectedWeekDate] = useState(new Date().toISOString().split('T')[0]);
   const weekDays = getWeekDays(selectedWeekDate);
 
-  // Drag & Drop -tila
+  // Drag & Drop
   const [draggedOrderId, setDraggedOrderId] = useState(null);
 
   // Firestore-kuuntelija
@@ -232,6 +232,7 @@ export default function App() {
       description: newDesc || 'Ei kuvausta',
       assignedTo: newAssignedTo,
       scheduledDate: newScheduleDate,
+      isWarranty: newIsWarranty,
       status: 'Odottaa',
       usedMaterials: [],
       loggedKm: 0,
@@ -243,6 +244,7 @@ export default function App() {
     setNewClient('');
     setNewAddress('');
     setNewDesc('');
+    setNewIsWarranty(false);
     setActiveTab('orders');
     alert(`Uusi työmääräys ${newId} luotu!`);
   };
@@ -275,7 +277,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans pb-20 print:bg-white print:text-black print:pb-0">
       
-      {/* YLÄPALKKI (Piilotetaan PDF-tulostuksessa) */}
+      {/* YLÄPALKKI (Piilotetaan tulostuksessa) */}
       <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 sticky top-0 z-20 shadow-lg print:hidden">
         <div className="flex justify-between items-center max-w-6xl mx-auto flex-wrap gap-2">
           <div>
@@ -346,8 +348,9 @@ export default function App() {
                   <div key={order.id} className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
                     <div className="flex justify-between items-start">
                       <div>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-xs bg-blue-900 text-blue-300 font-bold px-2 py-0.5 rounded">{order.id}</span>
+                          {order.isWarranty && <span className="text-[10px] bg-red-900/80 text-red-200 border border-red-500/50 font-bold px-1.5 py-0.5 rounded">🛡️ TAKUUTYÖ</span>}
                           {order.scheduledDate && <span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">📅 {order.scheduledDate}</span>}
                         </div>
                         <h3 className="font-bold text-base mt-1 text-white">{order.client}</h3>
@@ -460,6 +463,10 @@ export default function App() {
                   <label className="text-xs text-slate-400 block mb-1">Osoite</label>
                   <input type="text" placeholder="esim. Rantakatu 5" value={newAddress} onChange={(e) => setNewAddress(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white" />
                 </div>
+                <div className="flex items-center gap-2 p-2 bg-slate-900 rounded-lg border border-slate-700">
+                  <input type="checkbox" id="warrantyCheck" checked={newIsWarranty} onChange={(e) => setNewIsWarranty(e.target.checked)} className="w-4 h-4 text-red-600 rounded" />
+                  <label htmlFor="warrantyCheck" className="text-xs font-bold text-red-300 cursor-pointer">🛡️ Kyseessä on takuutyö</label>
+                </div>
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Osoitetaan asentajalle</label>
                   <select value={newAssignedTo} onChange={(e) => setNewAssignedTo(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white">
@@ -481,7 +488,7 @@ export default function App() {
         </main>
       )}
 
-      {/* --- NÄKYMÄ 2: TYÖNJOHTO (DRAG & DROP VIIKKOKALENTERI) --- */}
+      {/* --- NÄKYMÄ 2: TYÖNJOHTO --- */}
       {role === 'admin' && (
         <main className="flex-1 p-4 max-w-7xl mx-auto w-full space-y-6 print:hidden">
           <div className="flex justify-between items-center border-b border-slate-800 pb-4 flex-wrap gap-2">
@@ -501,7 +508,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* VIIKKOKALENTERITAULUKKO */}
           <div className="bg-slate-800 rounded-xl border border-slate-700 shadow overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[1000px]">
               <thead>
@@ -539,15 +545,13 @@ export default function App() {
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, o.id)}
                                 onClick={() => setPdfOrder(o)}
-                                className="bg-slate-900 hover:bg-slate-950 p-2 rounded-lg border border-slate-700 cursor-grab active:cursor-grabbing shadow space-y-1"
+                                className={`p-2 rounded-lg border cursor-grab active:cursor-grabbing shadow space-y-1 ${
+                                  o.isWarranty ? 'bg-red-950/60 border-red-700/80 hover:bg-red-900/80' : 'bg-slate-900 border-slate-700 hover:bg-slate-950'
+                                }`}
                               >
                                 <div className="flex justify-between items-center">
                                   <span className="font-mono font-bold text-blue-400 text-[10px]">{o.id}</span>
-                                  <span className={`text-[9px] px-1 rounded ${
-                                    o.status === 'Valmis' ? 'bg-green-900/50 text-green-300' :
-                                    o.status === 'Kesken' ? 'bg-amber-500/20 text-amber-300' :
-                                    'bg-slate-800 text-slate-400'
-                                  }`}>{o.status}</span>
+                                  {o.isWarranty && <span className="text-[8px] bg-red-800 text-red-100 font-bold px-1 rounded">TAKUU</span>}
                                 </div>
                                 <div className="font-bold text-white text-[11px] truncate">{o.client}</div>
                                 <div className="text-[10px] text-slate-400 truncate">📍 {o.address}</div>
@@ -563,15 +567,15 @@ export default function App() {
             </table>
           </div>
 
-          {/* TAULUKKO KAIKISTA TÖISTÄ (Klikkaamalla avaa PDF-raportin) */}
           <div className="bg-slate-800 rounded-xl border border-slate-700 shadow p-4 space-y-3">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Kaikki työmääräykset (Klikkaa riviä avataksesi PDF-raportin)</h3>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Kaikki työmääräykset (Klikkaa avataksesi PDF-raportin)</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse min-w-[700px]">
                 <thead>
                   <tr className="bg-slate-900 text-xs uppercase text-slate-400 border-b border-slate-700">
                     <th className="p-2.5">ID & Pvm</th>
                     <th className="p-2.5">Asiakas</th>
+                    <th className="p-2.5">Tyyppi</th>
                     <th className="p-2.5">Asentaja</th>
                     <th className="p-2.5">Tila</th>
                     <th className="p-2.5">Tunnit</th>
@@ -591,6 +595,9 @@ export default function App() {
                         <td className="p-2.5">
                           <div className="font-bold text-white">{o.client}</div>
                           <div className="text-slate-400 text-[11px]">📍 {o.address}</div>
+                        </td>
+                        <td className="p-2.5">
+                          {o.isWarranty ? <span className="text-red-400 font-bold">🛡️ Takuutyö</span> : <span className="text-slate-400">Normaali</span>}
                         </td>
                         <td className="p-2.5 text-slate-300 font-semibold">{o.assignedTo || 'Ei osoitettu'}</td>
                         <td className="p-2.5">
@@ -618,16 +625,23 @@ export default function App() {
         </main>
       )}
 
-      {/* --- MODAL 3: TÄYDELLINEN PDF-TYÖRAPORTTI (TULOSTA / TALLENNA PDF) --- */}
+      {/* --- MODAL 3: TÄYDELLINEN PDF-TYÖRAPORTTI (TULOSTA / TALLENNA PDF - KUVAT MUKANA!) --- */}
       {pdfOrder && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:static print:block">
-          <div className="bg-white text-slate-900 rounded-xl p-6 max-w-2xl w-full space-y-4 shadow-2xl overflow-y-auto max-h-[90vh] print:max-h-none print:shadow-none print:border-0 print:w-full">
+          <div className="bg-white text-slate-900 rounded-xl p-6 max-w-3xl w-full space-y-4 shadow-2xl overflow-y-auto max-h-[90vh] print:max-h-none print:shadow-none print:border-0 print:w-full print:p-0">
             
             {/* Header */}
             <div className="flex justify-between items-start border-b border-slate-300 pb-4">
               <div>
                 <h2 className="text-2xl font-bold text-blue-900">HUOLTOPRO - TYÖRAPORTTI</h2>
-                <p className="text-xs text-slate-600">TyömääräysID: <span className="font-mono font-bold text-slate-900">{pdfOrder.id}</span></p>
+                <div className="flex items-center gap-2 mt-1">
+                  <p className="text-xs text-slate-600">TyömääräysID: <span className="font-mono font-bold text-slate-900">{pdfOrder.id}</span></p>
+                  {pdfOrder.isWarranty && (
+                    <span className="text-xs bg-red-100 text-red-800 font-bold px-2 py-0.5 rounded border border-red-300">
+                      🛡️ TAKUUTYÖ
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="text-right">
                 <span className="text-xs text-slate-500 block">Päivämäärä</span>
@@ -699,17 +713,31 @@ export default function App() {
               </div>
             </div>
 
-            {/* Kuvat */}
-            {pdfOrder.photos?.length > 0 && (
-              <div>
-                <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Valokuvat kohteesta</h4>
-                <div className="grid grid-cols-3 gap-2">
+            {/* VALOKUVAT (PAKOTETAAN MUKAAN TULOSTEESEEN/PDF:ÄÄN) */}
+            <div className="pt-2 border-t border-slate-200 print:block">
+              <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">
+                📸 Valokuvat ja todisteet ({pdfOrder.photos?.length || 0} kpl)
+              </h4>
+              
+              {pdfOrder.photos?.length > 0 ? (
+                <div className="grid grid-cols-2 gap-3 print:grid-cols-2 print:gap-4">
                   {pdfOrder.photos.map((img, i) => (
-                    <img key={i} src={img} alt="Valokuva" className="w-full h-24 object-cover rounded border border-slate-300" />
+                    <div key={i} className="border border-slate-300 rounded p-1 bg-slate-50 print:border-slate-400">
+                      <img 
+                        src={img} 
+                        alt={`Takuutyökuva ${i + 1}`} 
+                        className="w-full h-44 object-cover rounded print:h-48 print:object-contain" 
+                      />
+                      <span className="text-[10px] text-slate-500 text-center block mt-1">Kuva {i + 1}</span>
+                    </div>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <p className="text-xs text-slate-400 italic bg-slate-50 p-2 rounded border border-slate-200">
+                  Työmääräykselle ei ole liitetty valokuvia.
+                </p>
+              )}
+            </div>
 
             {/* Painikkeet modalissa (Piilotetaan tulostettaessa) */}
             <div className="flex gap-2 pt-4 border-t border-slate-200 print:hidden">
