@@ -16,7 +16,7 @@ export default function App() {
       usedMaterials: [{ name: 'F7 Suodatinsetti', qty: 1, unit: 'kpl' }],
       loggedKm: 15,
       photos: [],
-      workLogs: [], // Tänne tallentuvat yksittäiset työrupeamat aloituksin, lopetuksin ja tarvikkein
+      workLogs: [],
       signed: false
     },
     {
@@ -34,24 +34,22 @@ export default function App() {
   ]);
 
   // Ajanotto
-  // activeTimer: { orderId, seconds, workType, startNote, startTime }
   const [activeTimer, setActiveTimer] = useState(null);
   
   // Saldopankki
   const [saldoHours, setSaldoHours] = useState(12.5);
 
-  // MODALIT (Pop-up ikkunat aloitukselle & lopetukselle)
-  const [startModalOrder, setStartModalOrder] = useState(null); // { orderId }
-  const [stopModalOrder, setStopModalOrder] = useState(null);   // { orderId }
+  // MODALIT (Pop-up)
+  const [startModalOrder, setStartModalOrder] = useState(null);
+  const [stopModalOrder, setStopModalOrder] = useState(null);
 
   // Aloituslomake
   const [workType, setWorkType] = useState('Kenttätyö');
   const [startNote, setStartNote] = useState('');
 
-  // Lopetuslomake
+  // Lopetuslomake (tukee useampaa tarviketta)
   const [endNote, setEndNote] = useState('');
-  const [usedMaterialName, setUsedMaterialName] = useState('');
-  const [usedMaterialQty, setUsedMaterialQty] = useState('');
+  const [stopMaterials, setStopMaterials] = useState([{ name: '', qty: 1 }]);
 
   // Muut lomaketilat
   const [selectedOrder, setSelectedOrder] = useState('TM-1042');
@@ -111,7 +109,7 @@ export default function App() {
     }
   };
 
-  // --- ALOITA TYÖ (Modalin avaaminen) ---
+  // --- ALOITA TYÖ ---
   const openStartModal = (orderId) => {
     if (activeTimer) {
       alert("Sinulla on jo toinen työ käynnissä! Pysäytä se ennen uuden aloittamista.");
@@ -132,23 +130,38 @@ export default function App() {
       startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
 
-    // Päivitetään tilaksi Kesken
     setOrders(orders.map(o => o.id === startModalOrder ? { ...o, status: 'Kesken' } : o));
     setStartModalOrder(null);
   };
 
-  // --- LOPETTA CODES (Modalin avaaminen) ---
+  // --- LOPETA TYÖ ---
   const openStopModal = (orderId) => {
     setStopModalOrder(orderId);
     setEndNote('');
-    setUsedMaterialName('');
-    setUsedMaterialQty('');
+    setStopMaterials([{ name: '', qty: 1 }]);
+  };
+
+  // Tarvikerivin lisääminen lopetusnäkymään
+  const handleAddStopMaterialRow = () => {
+    setStopMaterials([...stopMaterials, { name: '', qty: 1 }]);
+  };
+
+  // Tarvikerivin poistaminen
+  const handleRemoveStopMaterialRow = (index) => {
+    setStopMaterials(stopMaterials.filter((_, i) => i !== index));
+  };
+
+  // Tarvikerivin arvon muutos
+  const handleStopMaterialChange = (index, field, value) => {
+    const updated = [...stopMaterials];
+    updated[index][field] = value;
+    setStopMaterials(updated);
   };
 
   const confirmStopWork = (e) => {
     e.preventDefault();
     const hoursLogged = +(activeTimer.seconds / 3600).toFixed(2);
-    const finalHours = hoursLogged < 0.05 ? 0.25 : hoursLogged; // vähintään 15min kirjaus esimerkkilogiikalla
+    const finalHours = hoursLogged < 0.05 ? 0.25 : hoursLogged;
 
     const logEntry = {
       workType: activeTimer.workType,
@@ -158,20 +171,17 @@ export default function App() {
       timeString: formatTime(activeTimer.seconds)
     };
 
+    // Suodatetaan tyhjät tarvikkeet pois
+    const validNewMaterials = stopMaterials
+      .filter(m => m.name.trim() !== '')
+      .map(m => ({ name: m.name.trim(), qty: Number(m.qty) || 1, unit: 'kpl' }));
+
     setOrders(orders.map(o => {
       if (o.id === stopModalOrder) {
-        const updatedMaterials = [...o.usedMaterials];
-        if (usedMaterialName.trim()) {
-          updatedMaterials.push({
-            name: usedMaterialName,
-            qty: Number(usedMaterialQty) || 1,
-            unit: 'kpl'
-          });
-        }
         return {
           ...o,
           workLogs: [...o.workLogs, logEntry],
-          usedMaterials: updatedMaterials
+          usedMaterials: [...o.usedMaterials, ...validNewMaterials]
         };
       }
       return o;
@@ -180,7 +190,7 @@ export default function App() {
     setSaldoHours((prev) => +(prev + finalHours).toFixed(2));
     setActiveTimer(null);
     setStopModalOrder(null);
-    alert(`Työ päätetty! Kirjattiin ${finalHours} h (${activeTimer.workType}) saldopankkiin.`);
+    alert(`Työ päätetty! Kirjattiin ${finalHours} h saldopankkiin ja lisättiin ${validNewMaterials.length} tarviketta.`);
   };
 
   // Kuvan lisäys
@@ -195,7 +205,7 @@ export default function App() {
     }
   };
 
-  // Tarvikkeen lisäys manuaalisesti
+  // Tarvikkeen lisäys erilliseltä välilehdeltä
   const handleAddMaterial = (e) => {
     e.preventDefault();
     if (!materialName) return;
@@ -297,8 +307,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* --- OSIONÄKYMÄT --- */}
-
         {/* 1. TYÖMÄÄRÄYKSET */}
         {activeTab === 'orders' && (
           <div className="space-y-4">
@@ -336,7 +344,7 @@ export default function App() {
                     {order.description}
                   </p>
 
-                  {/* Tehdyt kirjaukset ja työrupeamat */}
+                  {/* Tehdyt kirjaukset */}
                   {order.workLogs.length > 0 && (
                     <div className="space-y-1 bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/80 text-xs">
                       <span className="text-slate-400 font-bold block mb-1">📋 Kirjatut työt:</span>
@@ -579,7 +587,7 @@ export default function App() {
 
       </main>
 
-      {/* --- MODAL 1: ALOITA TYÖ (VALIKKO & VAPAA TEKSTI) --- */}
+      {/* --- MODAL 1: ALOITA TYÖ --- */}
       {startModalOrder && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
@@ -605,7 +613,7 @@ export default function App() {
               </div>
 
               <div>
-                <label className="text-xs text-slate-300 font-semibold block mb-1">Aloitusexsti / Muistiinpano</label>
+                <label className="text-xs text-slate-300 font-semibold block mb-1">Aloitusteksti / Muistiinpano</label>
                 <textarea 
                   value={startNote}
                   onChange={(e) => setStartNote(e.target.value)}
@@ -634,10 +642,10 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODAL 2: LOPETA TYÖ (TEHDYT TYÖT & TARVIKKEET) --- */}
+      {/* --- MODAL 2: LOPETA TYÖ (MONINKERTAISET TARVIKKEET) --- */}
       {stopModalOrder && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="text-base font-bold text-white border-b border-slate-700 pb-2">
               ⏹ Lopeta työ: {stopModalOrder}
             </h3>
@@ -654,24 +662,46 @@ export default function App() {
                 />
               </div>
 
+              {/* MONINKERTAISET TARVIKERIVIT */}
               <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-700 space-y-2">
-                <span className="text-xs text-slate-300 font-semibold block">🛢️ Lisätäänkö tarvikkeita samalla?</span>
-                <input 
-                  type="text" 
-                  placeholder="Tarvikkeen nimi (esim. Öljy)" 
-                  value={usedMaterialName}
-                  onChange={(e) => setUsedMaterialName(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white"
-                />
-                {usedMaterialName.trim() && (
-                  <input 
-                    type="number" 
-                    placeholder="Määrä (kpl)" 
-                    value={usedMaterialQty}
-                    onChange={(e) => setUsedMaterialQty(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white font-mono"
-                  />
-                )}
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs text-slate-300 font-semibold">🛢️ Käytetyt tarvikkeet</span>
+                  <button 
+                    type="button" 
+                    onClick={handleAddStopMaterialRow}
+                    className="text-[11px] bg-blue-600/30 text-blue-300 border border-blue-500/40 px-2 py-0.5 rounded font-bold"
+                  >
+                    + Lisää rivi
+                  </button>
+                </div>
+
+                {stopMaterials.map((mat, idx) => (
+                  <div key={idx} className="flex gap-1.5 items-center">
+                    <input 
+                      type="text" 
+                      placeholder="Tarvikkeen nimi (esim. Öljy)" 
+                      value={mat.name}
+                      onChange={(e) => handleStopMaterialChange(idx, 'name', e.target.value)}
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white"
+                    />
+                    <input 
+                      type="number" 
+                      placeholder="Määrä" 
+                      value={mat.qty}
+                      onChange={(e) => handleStopMaterialChange(idx, 'qty', e.target.value)}
+                      className="w-16 bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white font-mono text-center"
+                    />
+                    {stopMaterials.length > 1 && (
+                      <button 
+                        type="button" 
+                        onClick={() => handleRemoveStopMaterialRow(idx)}
+                        className="bg-red-900/50 text-red-300 border border-red-700/50 p-2 rounded-lg text-xs font-bold"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
 
               <div className="flex gap-2 pt-2">
