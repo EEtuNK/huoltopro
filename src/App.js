@@ -11,7 +11,6 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 
-// Firebase-määritelmät
 const firebaseConfig = {
   apiKey: "AIzaSyCrliSXqRQkh2-QPBIr-nfHMj4HjsMeIWI",
   authDomain: "huoltopro-87e70.firebaseapp.com",
@@ -42,12 +41,41 @@ function getWeekDays(startDateStr) {
   return days;
 }
 
+// Apufunktio: Pakataan kuva automaattisesti ennen tallennusta, jotta Firestore ei hylkää sitä!
+const compressImage = (file, maxWidth = 1200, quality = 0.7) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressedDataUrl);
+      };
+    };
+  });
+};
+
 export default function App() {
   const [role, setRole] = useState('tech');
   const [selectedTech, setSelectedTech] = useState('Matti Meikäläinen');
   const [activeTab, setActiveTab] = useState('orders');
   const [orders, setOrders] = useState([]);
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
 
   // Ajanotto & Saldo
   const [activeTimer, setActiveTimer] = useState(null);
@@ -207,17 +235,19 @@ export default function App() {
     alert('Kilometrit tallennettu!');
   };
 
-  // Kuva
-  const handlePhotoUpload = (orderId, e) => {
+  // KUVAN LÄHETYS JA AUTOMAATTINEN PAKKAUS (PYSYVÄ SÄILYTYS)
+  const handlePhotoUpload = async (orderId, e) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
+      try {
+        const compressedImageBase64 = await compressImage(file, 1200, 0.7);
         await updateDoc(doc(db, 'orders', orderId), {
-          photos: arrayUnion(reader.result)
+          photos: arrayUnion(compressedImageBase64)
         });
-      };
-      reader.readAsDataURL(file);
+        alert("Valokuva tallennettu onnistuneesti tietokantaan!");
+      } catch (err) {
+        alert("Virhe kuvan tallennuksessa: " + err.message);
+      }
     }
   };
 
@@ -249,7 +279,7 @@ export default function App() {
     alert(`Uusi työmääräys ${newId} luotu!`);
   };
 
-  // Drag & Drop -käsittely kalenterissa
+  // Drag & Drop
   const handleDragStart = (e, orderId) => {
     e.dataTransfer.setData('text/plain', orderId);
     setDraggedOrderId(orderId);
@@ -277,7 +307,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans pb-20 print:bg-white print:text-black print:pb-0">
       
-      {/* YLÄPALKKI (Piilotetaan tulostuksessa) */}
+      {/* YLÄPALKKI */}
       <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 sticky top-0 z-20 shadow-lg print:hidden">
         <div className="flex justify-between items-center max-w-6xl mx-auto flex-wrap gap-2">
           <div>
@@ -625,7 +655,7 @@ export default function App() {
         </main>
       )}
 
-      {/* --- MODAL 3: TÄYDELLINEN PDF-TYÖRAPORTTI (TULOSTA / TALLENNA PDF - KUVAT MUKANA!) --- */}
+      {/* --- MODAL 3: TÄYDELLINEN TAKUURAPORTTI & KORKEALAATUINEN KUVAN LATAUS/TULOSTA --- */}
       {pdfOrder && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:static print:block">
           <div className="bg-white text-slate-900 rounded-xl p-6 max-w-3xl w-full space-y-4 shadow-2xl overflow-y-auto max-h-[90vh] print:max-h-none print:shadow-none print:border-0 print:w-full print:p-0">
@@ -713,22 +743,31 @@ export default function App() {
               </div>
             </div>
 
-            {/* VALOKUVAT (PAKOTETAAN MUKAAN TULOSTEESEEN/PDF:ÄÄN) */}
-            <div className="pt-2 border-t border-slate-200 print:block">
+            {/* VALOKUVAT KORKEALAATUINAPAPERILLE + SUORA LATAUSLINKKI VASTAANOTTAJALLE */}
+            <div className="pt-2 border-t border-slate-200">
               <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">
-                📸 Valokuvat ja todisteet ({pdfOrder.photos?.length || 0} kpl)
+                📸 Valokuvat ja takuutodisteet ({pdfOrder.photos?.length || 0} kpl)
               </h4>
               
               {pdfOrder.photos?.length > 0 ? (
-                <div className="grid grid-cols-2 gap-3 print:grid-cols-2 print:gap-4">
+                <div className="space-y-4">
                   {pdfOrder.photos.map((img, i) => (
-                    <div key={i} className="border border-slate-300 rounded p-1 bg-slate-50 print:border-slate-400">
+                    <div key={i} className="border border-slate-300 rounded-lg p-2 bg-slate-50 print:border-slate-400 print:bg-white page-break-inside-avoid">
                       <img 
                         src={img} 
                         alt={`Takuutyökuva ${i + 1}`} 
-                        className="w-full h-44 object-cover rounded print:h-48 print:object-contain" 
+                        className="w-full max-h-[500px] object-contain rounded bg-black/5" 
                       />
-                      <span className="text-[10px] text-slate-500 text-center block mt-1">Kuva {i + 1}</span>
+                      <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-200 print:hidden">
+                        <span className="text-xs text-slate-600 font-bold">Kuva {i + 1} / {pdfOrder.photos.length}</span>
+                        <a 
+                          href={img} 
+                          download={`Takuukuva_${pdfOrder.id}_${i + 1}.jpg`}
+                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded font-bold shadow flex items-center gap-1"
+                        >
+                          ⏬ Lataa alkuperäinen kuva (Täysi laatu)
+                        </a>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -739,7 +778,7 @@ export default function App() {
               )}
             </div>
 
-            {/* Painikkeet modalissa (Piilotetaan tulostettaessa) */}
+            {/* Painikkeet (Piilotetaan tulostettaessa) */}
             <div className="flex gap-2 pt-4 border-t border-slate-200 print:hidden">
               <button onClick={() => setPdfOrder(null)} className="flex-1 bg-slate-200 text-slate-800 py-2 rounded-lg text-xs font-bold">
                 Sulje
@@ -752,7 +791,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 1: ALOITA TYÖ */}
+      {/* MODAL 1 & 2 (Aloita/Lopeta) */}
       {startModalOrder && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 print:hidden">
           <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
@@ -776,7 +815,6 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL 2: LOPETA TYÖ */}
       {stopModalOrder && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 print:hidden">
           <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
