@@ -5,7 +5,7 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [isStandalone, setIsStandalone] = useState(false);
 
-  // Työmääräykset
+  // Työmääräykset (sisältää 'photos'-taulukon)
   const [orders, setOrders] = useState([
     {
       id: 'TM-1042',
@@ -15,6 +15,7 @@ export default function App() {
       status: 'Kesken',
       usedMaterials: [{ name: 'F7 Suodatinsetti', qty: 1, unit: 'kpl' }],
       loggedKm: 15,
+      photos: [],
       signed: false
     },
     {
@@ -25,17 +26,18 @@ export default function App() {
       status: 'Odottaa',
       usedMaterials: [],
       loggedKm: 0,
+      photos: [],
       signed: false
     }
   ]);
 
   // Ajanotto
-  const [activeTimer, setActiveTimer] = useState(null); // { orderId, seconds }
+  const [activeTimer, setActiveTimer] = useState(null);
   
   // Saldopankki
   const [saldoHours, setSaldoHours] = useState(12.5);
 
-  // Lomaketilat (Uusi työ & tarvike)
+  // Lomaketilat
   const [selectedOrder, setSelectedOrder] = useState('TM-1042');
   const [materialName, setMaterialName] = useState('');
   const [materialQty, setMaterialQty] = useState(1);
@@ -93,16 +95,35 @@ export default function App() {
     }
   };
 
-  // Ajanoton alustus / lopetus
+  // Ajanotto
   const toggleTimer = (orderId) => {
     if (activeTimer && activeTimer.orderId === orderId) {
-      // Lopetetaan ja kirjaataan tunnit
       const hoursLogged = +(activeTimer.seconds / 3600).toFixed(2);
       setSaldoHours((prev) => +(prev + hoursLogged).toFixed(2));
       alert(`Työ pysäytetty! Kirjattiin ${hoursLogged} h saldopankkiin.`);
       setActiveTimer(null);
     } else {
       setActiveTimer({ orderId, seconds: 0 });
+    }
+  };
+
+  // Kuvan lisääminen kamerasta / galleriasta
+  const handlePhotoUpload = (orderId, e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setOrders(orders.map(o => {
+          if (o.id === orderId) {
+            return {
+              ...o,
+              photos: [...o.photos, reader.result]
+            };
+          }
+          return o;
+        }));
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -151,6 +172,7 @@ export default function App() {
       status: 'Odottaa',
       usedMaterials: [],
       loggedKm: 0,
+      photos: [],
       signed: false
     };
     setOrders([newOrderObj, ...orders]);
@@ -214,8 +236,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* --- OSIONÄKYMÄT --- */}
-
         {/* 1. TYÖMÄÄRÄYKSET */}
         {activeTab === 'orders' && (
           <div className="space-y-4">
@@ -267,8 +287,38 @@ export default function App() {
                     </div>
                   )}
 
+                  {/* KUVAGALLERIA & KAMERA-PAIKE */}
+                  <div className="space-y-2 pt-1 border-t border-slate-700/60">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-slate-400 font-semibold">📸 Kuvat ({order.photos.length})</span>
+                      <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-600 font-semibold flex items-center gap-1">
+                        📷 Ota kuva
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          capture="environment"
+                          onChange={(e) => handlePhotoUpload(order.id, e)}
+                          className="hidden" 
+                        />
+                      </label>
+                    </div>
+
+                    {order.photos.length > 0 && (
+                      <div className="grid grid-cols-3 gap-2 pt-1">
+                        {order.photos.map((imgSrc, idx) => (
+                          <img 
+                            key={idx} 
+                            src={imgSrc} 
+                            alt={`Kohdekuva ${idx + 1}`} 
+                            className="w-full h-20 object-cover rounded-lg border border-slate-700 shadow"
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   {/* Toimintopainikkeet */}
-                  <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60">
                     <button 
                       onClick={() => toggleTimer(order.id)}
                       className={`font-semibold py-2.5 rounded-lg text-xs shadow flex justify-center items-center gap-1 ${
@@ -371,7 +421,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. TUNTIKIRJAUS (MANUAALINEN) */}
+        {/* 3. TUNTIKIRJAUS */}
         {activeTab === 'time' && (
           <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
             <h2 className="text-sm font-bold text-white uppercase tracking-wider">⏱️ Manuaalinen tuntikirjaus</h2>
