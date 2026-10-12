@@ -5,17 +5,18 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [isStandalone, setIsStandalone] = useState(false);
 
-  // Työmääräykset (sisältää 'photos'-taulukon)
+  // Työmääräykset
   const [orders, setOrders] = useState([
     {
       id: 'TM-1042',
       client: 'Kiinteistö Oy Valo',
       address: 'Teollisuustie 4, Kokkola',
       description: 'Ilmanvaihtokoneen vuosihuolto ja suodattimien vaihto',
-      status: 'Kesken',
+      status: 'Odottaa',
       usedMaterials: [{ name: 'F7 Suodatinsetti', qty: 1, unit: 'kpl' }],
       loggedKm: 15,
       photos: [],
+      workLogs: [], // Tänne tallentuvat yksittäiset työrupeamat aloituksin, lopetuksin ja tarvikkein
       signed: false
     },
     {
@@ -27,17 +28,32 @@ export default function App() {
       usedMaterials: [],
       loggedKm: 0,
       photos: [],
+      workLogs: [],
       signed: false
     }
   ]);
 
   // Ajanotto
+  // activeTimer: { orderId, seconds, workType, startNote, startTime }
   const [activeTimer, setActiveTimer] = useState(null);
   
   // Saldopankki
   const [saldoHours, setSaldoHours] = useState(12.5);
 
-  // Lomaketilat
+  // MODALIT (Pop-up ikkunat aloitukselle & lopetukselle)
+  const [startModalOrder, setStartModalOrder] = useState(null); // { orderId }
+  const [stopModalOrder, setStopModalOrder] = useState(null);   // { orderId }
+
+  // Aloituslomake
+  const [workType, setWorkType] = useState('Kenttätyö');
+  const [startNote, setStartNote] = useState('');
+
+  // Lopetuslomake
+  const [endNote, setEndNote] = useState('');
+  const [usedMaterialName, setUsedMaterialName] = useState('');
+  const [usedMaterialQty, setUsedMaterialQty] = useState('');
+
+  // Muut lomaketilat
   const [selectedOrder, setSelectedOrder] = useState('TM-1042');
   const [materialName, setMaterialName] = useState('');
   const [materialQty, setMaterialQty] = useState(1);
@@ -95,71 +111,113 @@ export default function App() {
     }
   };
 
-  // Ajanotto
-  const toggleTimer = (orderId) => {
-    if (activeTimer && activeTimer.orderId === orderId) {
-      const hoursLogged = +(activeTimer.seconds / 3600).toFixed(2);
-      setSaldoHours((prev) => +(prev + hoursLogged).toFixed(2));
-      alert(`Työ pysäytetty! Kirjattiin ${hoursLogged} h saldopankkiin.`);
-      setActiveTimer(null);
-    } else {
-      setActiveTimer({ orderId, seconds: 0 });
+  // --- ALOITA TYÖ (Modalin avaaminen) ---
+  const openStartModal = (orderId) => {
+    if (activeTimer) {
+      alert("Sinulla on jo toinen työ käynnissä! Pysäytä se ennen uuden aloittamista.");
+      return;
     }
+    setStartModalOrder(orderId);
+    setWorkType('Kenttätyö');
+    setStartNote('');
   };
 
-  // Kuvan lisääminen kamerasta / galleriasta
+  const confirmStartWork = (e) => {
+    e.preventDefault();
+    setActiveTimer({
+      orderId: startModalOrder,
+      seconds: 0,
+      workType,
+      startNote,
+      startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    });
+
+    // Päivitetään tilaksi Kesken
+    setOrders(orders.map(o => o.id === startModalOrder ? { ...o, status: 'Kesken' } : o));
+    setStartModalOrder(null);
+  };
+
+  // --- LOPETTA CODES (Modalin avaaminen) ---
+  const openStopModal = (orderId) => {
+    setStopModalOrder(orderId);
+    setEndNote('');
+    setUsedMaterialName('');
+    setUsedMaterialQty('');
+  };
+
+  const confirmStopWork = (e) => {
+    e.preventDefault();
+    const hoursLogged = +(activeTimer.seconds / 3600).toFixed(2);
+    const finalHours = hoursLogged < 0.05 ? 0.25 : hoursLogged; // vähintään 15min kirjaus esimerkkilogiikalla
+
+    const logEntry = {
+      workType: activeTimer.workType,
+      startNote: activeTimer.startNote,
+      endNote,
+      hours: finalHours,
+      timeString: formatTime(activeTimer.seconds)
+    };
+
+    setOrders(orders.map(o => {
+      if (o.id === stopModalOrder) {
+        const updatedMaterials = [...o.usedMaterials];
+        if (usedMaterialName.trim()) {
+          updatedMaterials.push({
+            name: usedMaterialName,
+            qty: Number(usedMaterialQty) || 1,
+            unit: 'kpl'
+          });
+        }
+        return {
+          ...o,
+          workLogs: [...o.workLogs, logEntry],
+          usedMaterials: updatedMaterials
+        };
+      }
+      return o;
+    }));
+
+    setSaldoHours((prev) => +(prev + finalHours).toFixed(2));
+    setActiveTimer(null);
+    setStopModalOrder(null);
+    alert(`Työ päätetty! Kirjattiin ${finalHours} h (${activeTimer.workType}) saldopankkiin.`);
+  };
+
+  // Kuvan lisäys
   const handlePhotoUpload = (orderId, e) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setOrders(orders.map(o => {
-          if (o.id === orderId) {
-            return {
-              ...o,
-              photos: [...o.photos, reader.result]
-            };
-          }
-          return o;
-        }));
+        setOrders(orders.map(o => o.id === orderId ? { ...o, photos: [...o.photos, reader.result] } : o));
       };
       reader.readAsDataURL(file);
     }
   };
 
-  // Tarvikkeen lisääminen
+  // Tarvikkeen lisäys manuaalisesti
   const handleAddMaterial = (e) => {
     e.preventDefault();
     if (!materialName) return;
-    setOrders(orders.map(o => {
-      if (o.id === selectedOrder) {
-        return {
-          ...o,
-          usedMaterials: [...o.usedMaterials, { name: materialName, qty: Number(materialQty), unit: 'kpl' }]
-        };
-      }
-      return o;
-    }));
+    setOrders(orders.map(o => o.id === selectedOrder ? {
+      ...o,
+      usedMaterials: [...o.usedMaterials, { name: materialName, qty: Number(materialQty), unit: 'kpl' }]
+    } : o));
     setMaterialName('');
     setMaterialQty(1);
-    alert('Tarvike lisätty työmääräykselle!');
+    alert('Tarvike lisätty!');
   };
 
-  // Kilometrien lisääminen
+  // Kilometrien lisäys
   const handleAddKm = (e) => {
     e.preventDefault();
     if (!kmAmount) return;
-    setOrders(orders.map(o => {
-      if (o.id === selectedOrder) {
-        return { ...o, loggedKm: o.loggedKm + Number(kmAmount) };
-      }
-      return o;
-    }));
+    setOrders(orders.map(o => o.id === selectedOrder ? { ...o, loggedKm: o.loggedKm + Number(kmAmount) } : o));
     setKmAmount('');
     alert('Kilometrit kirjaantuneet!');
   };
 
-  // Uuden työmääräyksen luonti
+  // Uusi työmääräys
   const handleCreateOrder = (e) => {
     e.preventDefault();
     if (!newClient) return;
@@ -173,6 +231,7 @@ export default function App() {
       usedMaterials: [],
       loggedKm: 0,
       photos: [],
+      workLogs: [],
       signed: false
     };
     setOrders([newOrderObj, ...orders]);
@@ -183,7 +242,7 @@ export default function App() {
     alert(`Uusi työmääräys ${newId} luotu!`);
   };
 
-  // Tuntien manuaalikirjaus
+  // Manuaalitunnit
   const handleManualTimeSubmit = (e) => {
     e.preventDefault();
     const added = parseFloat(manualHours) || 0;
@@ -195,7 +254,7 @@ export default function App() {
   // Kuittaus
   const handleSignOrder = (orderId) => {
     setOrders(orders.map(o => o.id === orderId ? { ...o, signed: true, status: 'Valmis' } : o));
-    alert('Työmääräys kuitattu valmiiksi sähköisesti!');
+    alert('Työmääräys kuitattu valmiiksi!');
   };
 
   return (
@@ -220,7 +279,7 @@ export default function App() {
       {/* Pääsisältö */}
       <main className="flex-1 p-4 max-w-md mx-auto w-full space-y-4">
         
-        {/* Saldokortti */}
+        {/* Saldokortti & Käynnissä oleva kello */}
         <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow flex justify-between items-center">
           <div>
             <span className="text-xs text-slate-400 uppercase tracking-wider block">Liukumasaldo</span>
@@ -229,12 +288,16 @@ export default function App() {
             </span>
           </div>
           <div className="text-right">
-            <span className="text-xs text-slate-400 uppercase tracking-wider block">Käynnissä</span>
-            <span className="text-sm font-mono text-blue-300">
+            <span className="text-xs text-slate-400 uppercase tracking-wider block">
+              {activeTimer ? `⏱️ ${activeTimer.workType}` : 'Kello'}
+            </span>
+            <span className={`text-sm font-mono ${activeTimer ? 'text-amber-400 font-bold' : 'text-slate-400'}`}>
               {activeTimer ? formatTime(activeTimer.seconds) : 'Ei käynnissä'}
             </span>
           </div>
         </div>
+
+        {/* --- OSIONÄKYMÄT --- */}
 
         {/* 1. TYÖMÄÄRÄYKSET */}
         {activeTab === 'orders' && (
@@ -273,6 +336,20 @@ export default function App() {
                     {order.description}
                   </p>
 
+                  {/* Tehdyt kirjaukset ja työrupeamat */}
+                  {order.workLogs.length > 0 && (
+                    <div className="space-y-1 bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/80 text-xs">
+                      <span className="text-slate-400 font-bold block mb-1">📋 Kirjatut työt:</span>
+                      {order.workLogs.map((log, idx) => (
+                        <div key={idx} className="border-b border-slate-800 pb-1 last:border-0">
+                          <span className="text-blue-300 font-bold">{log.workType}</span> ({log.hours} h):
+                          {log.startNote && <span className="text-slate-400 block"> Aloitus: {log.startNote}</span>}
+                          {log.endNote && <span className="text-slate-200 block font-medium"> Tehty: {log.endNote}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Käytetyt tarvikkeet & kilometrit */}
                   {(order.usedMaterials.length > 0 || order.loggedKm > 0) && (
                     <div className="text-xs space-y-1 bg-slate-900/40 p-2 rounded border border-slate-700/50">
@@ -287,7 +364,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* KUVAGALLERIA & KAMERA-PAIKE */}
+                  {/* KUVAT */}
                   <div className="space-y-2 pt-1 border-t border-slate-700/60">
                     <div className="flex justify-between items-center">
                       <span className="text-xs text-slate-400 font-semibold">📸 Kuvat ({order.photos.length})</span>
@@ -306,12 +383,7 @@ export default function App() {
                     {order.photos.length > 0 && (
                       <div className="grid grid-cols-3 gap-2 pt-1">
                         {order.photos.map((imgSrc, idx) => (
-                          <img 
-                            key={idx} 
-                            src={imgSrc} 
-                            alt={`Kohdekuva ${idx + 1}`} 
-                            className="w-full h-20 object-cover rounded-lg border border-slate-700 shadow"
-                          />
+                          <img key={idx} src={imgSrc} alt="Kohdekuva" className="w-full h-20 object-cover rounded-lg border border-slate-700 shadow" />
                         ))}
                       </div>
                     )}
@@ -319,16 +391,21 @@ export default function App() {
 
                   {/* Toimintopainikkeet */}
                   <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60">
-                    <button 
-                      onClick={() => toggleTimer(order.id)}
-                      className={`font-semibold py-2.5 rounded-lg text-xs shadow flex justify-center items-center gap-1 ${
-                        isRunning 
-                          ? 'bg-red-600 hover:bg-red-500 text-white animate-pulse' 
-                          : 'bg-green-600 hover:bg-green-500 text-white'
-                      }`}
-                    >
-                      {isRunning ? `⏸ Stop (${formatTime(activeTimer.seconds)})` : '▶️ Aloita työ'}
-                    </button>
+                    {!isRunning ? (
+                      <button 
+                        onClick={() => openStartModal(order.id)}
+                        className="bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow flex justify-center items-center gap-1"
+                      >
+                        ▶️ Aloita työ
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => openStopModal(order.id)}
+                        className="bg-red-600 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow flex justify-center items-center gap-1 animate-pulse"
+                      >
+                        ⏹ Lopeta työ ({formatTime(activeTimer.seconds)})
+                      </button>
+                    )}
 
                     {!order.signed ? (
                       <button 
@@ -421,7 +498,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. TUNTIKIRJAUS */}
+        {/* 3. TUNTIKIRJAUS (MANUAALINEN) */}
         {activeTab === 'time' && (
           <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
             <h2 className="text-sm font-bold text-white uppercase tracking-wider">⏱️ Manuaalinen tuntikirjaus</h2>
@@ -501,6 +578,121 @@ export default function App() {
         )}
 
       </main>
+
+      {/* --- MODAL 1: ALOITA TYÖ (VALIKKO & VAPAA TEKSTI) --- */}
+      {startModalOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white border-b border-slate-700 pb-2">
+              ▶️ Aloita työmääräys: {startModalOrder}
+            </h3>
+
+            <form onSubmit={confirmStartWork} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-300 font-semibold block mb-1">Valitse työn laatu *</label>
+                <select 
+                  value={workType} 
+                  onChange={(e) => setWorkType(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-xs text-white font-semibold"
+                >
+                  <option value="Kenttätyö">🛠️ Kenttätyö</option>
+                  <option value="Korjaamotyö">🔧 Korjaamotyö</option>
+                  <option value="Matka / Ajo">🚗 Matka / Ajo</option>
+                  <option value="Huolto">🛢️ Huolto</option>
+                  <option value="Vianetsintä / Suunnittelu">🔍 Vianetsintä / Suunnittelu</option>
+                  <option value="Koulutus / Palaveri">💬 Koulutus / Palaveri</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-300 font-semibold block mb-1">Aloitusexsti / Muistiinpano</label>
+                <textarea 
+                  value={startNote}
+                  onChange={(e) => setStartNote(e.target.value)}
+                  placeholder="Vapaaehtoinen aloitusilmoitus tai huomio..." 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white h-16"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setStartModalOrder(null)}
+                  className="flex-1 bg-slate-700 text-slate-300 py-2 rounded-lg text-xs font-semibold"
+                >
+                  Peruuta
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 bg-green-600 hover:bg-green-500 text-white py-2 rounded-lg text-xs font-semibold shadow"
+                >
+                  Käynnistä kello
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 2: LOPETA TYÖ (TEHDYT TYÖT & TARVIKKEET) --- */}
+      {stopModalOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white border-b border-slate-700 pb-2">
+              ⏹ Lopeta työ: {stopModalOrder}
+            </h3>
+
+            <form onSubmit={confirmStopWork} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-300 font-semibold block mb-1">Selite tehdystä työstä *</label>
+                <textarea 
+                  required
+                  value={endNote}
+                  onChange={(e) => setEndNote(e.target.value)}
+                  placeholder="Mitä kohteessa tehtiin ja saatiinko valmiiksi..." 
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white h-20"
+                />
+              </div>
+
+              <div className="p-3 bg-slate-900/60 rounded-lg border border-slate-700 space-y-2">
+                <span className="text-xs text-slate-300 font-semibold block">🛢️ Lisätäänkö tarvikkeita samalla?</span>
+                <input 
+                  type="text" 
+                  placeholder="Tarvikkeen nimi (esim. Öljy)" 
+                  value={usedMaterialName}
+                  onChange={(e) => setUsedMaterialName(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white"
+                />
+                {usedMaterialName.trim() && (
+                  <input 
+                    type="number" 
+                    placeholder="Määrä (kpl)" 
+                    value={usedMaterialQty}
+                    onChange={(e) => setUsedMaterialQty(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white font-mono"
+                  />
+                )}
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setStopModalOrder(null)}
+                  className="flex-1 bg-slate-700 text-slate-300 py-2 rounded-lg text-xs font-semibold"
+                >
+                  Takaisin
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 bg-red-600 hover:bg-red-500 text-white py-2 rounded-lg text-xs font-semibold shadow"
+                >
+                  Päätä työ ja tallenna
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Alavalikko / Navigaatio */}
       <nav className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 flex justify-around p-2 z-20 shadow-2xl">
