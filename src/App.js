@@ -25,48 +25,67 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// Esimerkkiasentajat
 const TECHS = ['Matti Meikäläinen', 'Pekka Päällikkö', 'Juho Asentaja'];
 
+// Apufunktio viikon päivien hakemiseen
+function getWeekDays(startDateStr) {
+  const start = new Date(startDateStr);
+  const day = start.getDay();
+  const diff = start.getDate() - day + (day === 0 ? -6 : 1); // Maanantai
+  const monday = new Date(start.setDate(diff));
+  
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    days.push(d.toISOString().split('T')[0]);
+  }
+  return days;
+}
+
 export default function App() {
-  const [role, setRole] = useState('tech'); // 'tech' = Asentaja, 'admin' = Työnjohto
-  const [selectedTech, setSelectedTech] = useState('Matti Meikäläinen'); // Kirjautunut asentaja
-  const [activeTab, setActiveTab] = useState('orders'); // 'orders', 'materials', 'newOrder'
+  const [role, setRole] = useState('tech');
+  const [selectedTech, setSelectedTech] = useState('Matti Meikäläinen');
+  const [activeTab, setActiveTab] = useState('orders');
   const [orders, setOrders] = useState([]);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [isStandalone, setIsStandalone] = useState(false);
 
-  // Ajanotto
+  // Ajanotto & Saldo
   const [activeTimer, setActiveTimer] = useState(null);
   const [saldoHours, setSaldoHours] = useState(12.5);
 
-  // Modalit
+  // Modalit (Aloitus / Lopetus / PDF-Esikatselu)
   const [startModalOrder, setStartModalOrder] = useState(null);
   const [stopModalOrder, setStopModalOrder] = useState(null);
+  const [pdfOrder, setPdfOrder] = useState(null); // Avaa työmääräyksen PDF-tulostukseen
 
-  // Lomaketilat (Aloitus & Lopetus)
+  // Formit
   const [workType, setWorkType] = useState('Kenttätyö');
   const [startNote, setStartNote] = useState('');
   const [endNote, setEndNote] = useState('');
   const [stopMaterials, setStopMaterials] = useState([{ name: '', qty: 1 }]);
 
-  // Erilliset tarvike & km -kirjaukset
+  // Tarvikkeet & Km
   const [selectedOrderForMat, setSelectedOrderForMat] = useState('');
   const [matName, setMatName] = useState('');
   const [matQty, setMatQty] = useState(1);
   const [kmVal, setKmVal] = useState('');
 
-  // Uusi työ (Luonti)
+  // Uusi työ
   const [newClient, setNewClient] = useState('');
   const [newAddress, setNewAddress] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newAssignedTo, setNewAssignedTo] = useState('Matti Meikäläinen');
   const [newScheduleDate, setNewScheduleDate] = useState(new Date().toISOString().split('T')[0]);
 
-  // Kalenterin valittu päivä (Työnjohto)
-  const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
+  // Viikkokalenteri (Valittu maanantai/viikko)
+  const [selectedWeekDate, setSelectedWeekDate] = useState(new Date().toISOString().split('T')[0]);
+  const weekDays = getWeekDays(selectedWeekDate);
 
-  // Reaaliaikainen Firestore-kuuntelija
+  // Drag & Drop -tila
+  const [draggedOrderId, setDraggedOrderId] = useState(null);
+
+  // Firestore-kuuntelija
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'orders'), (snapshot) => {
       const fetchedOrders = snapshot.docs.map(docSnap => ({
@@ -78,21 +97,8 @@ export default function App() {
         setSelectedOrderForMat(fetchedOrders[0].id);
       }
     });
-
     return () => unsubscribe();
   }, [selectedOrderForMat]);
-
-  // PWA-tuki
-  useEffect(() => {
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    });
-
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setIsStandalone(true);
-    }
-  }, []);
 
   // Sekuntikello
   useEffect(() => {
@@ -114,18 +120,10 @@ export default function App() {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handleInstallClick = () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-    } else {
-      alert("Asenna sovellus selaimen valikosta:\n\n• Safari (iOS): Paina 'Jaa' -> 'Lisää kotivalikkoon'\n• Chrome (Android): Paina '...' -> 'Asenna sovellus'");
-    }
-  };
-
-  // ALOITA TYÖ
+  // Aloita työ
   const openStartModal = (orderId) => {
     if (activeTimer) {
-      alert("Sinulla on jo toinen työ käynnissä! Pysäytä se ennen uuden aloittamista.");
+      alert("Sinulla on jo työ käynnissä!");
       return;
     }
     setStartModalOrder(orderId);
@@ -142,12 +140,11 @@ export default function App() {
       startNote,
       startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
-
     await updateDoc(doc(db, 'orders', startModalOrder), { status: 'Kesken' });
     setStartModalOrder(null);
   };
 
-  // LOPETA TYÖ
+  // Lopeta työ
   const openStopModal = (orderId) => {
     setStopModalOrder(orderId);
     setEndNote('');
@@ -187,38 +184,30 @@ export default function App() {
     setStopModalOrder(null);
   };
 
-  // Erillinen Tarvikkeen Tallenus
+  // Erillinen tarvike / km
   const handleAddSeparateMaterial = async (e) => {
     e.preventDefault();
     if (!matName || !selectedOrderForMat) return;
-
-    const orderRef = doc(db, 'orders', selectedOrderForMat);
-    await updateDoc(orderRef, {
+    await updateDoc(doc(db, 'orders', selectedOrderForMat), {
       usedMaterials: arrayUnion({ name: matName.trim(), qty: Number(matQty) || 1, unit: 'kpl' })
     });
-
     setMatName('');
     setMatQty(1);
-    alert('Tarvike lisätty työmääräykselle!');
+    alert('Tarvike lisätty!');
   };
 
-  // Erillinen Kilometrien Tallenus
   const handleAddSeparateKm = async (e) => {
     e.preventDefault();
     if (!kmVal || !selectedOrderForMat) return;
-
     const targetOrder = orders.find(o => o.id === selectedOrderForMat);
-    const currentKm = targetOrder?.loggedKm || 0;
-
     await updateDoc(doc(db, 'orders', selectedOrderForMat), {
-      loggedKm: currentKm + Number(kmVal)
+      loggedKm: (targetOrder?.loggedKm || 0) + Number(kmVal)
     });
-
     setKmVal('');
     alert('Kilometrit tallennettu!');
   };
 
-  // Kuvan lisäys
+  // Kuva
   const handlePhotoUpload = (orderId, e) => {
     const file = e.target.files[0];
     if (file) {
@@ -232,11 +221,10 @@ export default function App() {
     }
   };
 
-  // Uuden työn luonti (Pilveen)
+  // Luonti
   const handleCreateOrder = async (e) => {
     e.preventDefault();
     if (!newClient) return;
-    
     const newId = `TM-${Math.floor(1000 + Math.random() * 9000)}`;
     await setDoc(doc(db, 'orders', newId), {
       client: newClient,
@@ -252,38 +240,50 @@ export default function App() {
       signed: false,
       createdAt: serverTimestamp()
     });
-
     setNewClient('');
     setNewAddress('');
     setNewDesc('');
     setActiveTab('orders');
-    alert(`Uusi työmääräys ${newId} osoitettu asentajalle ${newAssignedTo} (${newScheduleDate})!`);
+    alert(`Uusi työmääräys ${newId} luotu!`);
   };
 
-  // Sähköinen kuittaus
-  const handleSignOrder = async (orderId) => {
+  // Drag & Drop -käsittely kalenterissa
+  const handleDragStart = (e, orderId) => {
+    e.dataTransfer.setData('text/plain', orderId);
+    setDraggedOrderId(orderId);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = async (e, techName, targetDate) => {
+    e.preventDefault();
+    const orderId = e.dataTransfer.getData('text/plain') || draggedOrderId;
+    if (!orderId) return;
+
     await updateDoc(doc(db, 'orders', orderId), {
-      signed: true,
-      status: 'Valmis'
+      assignedTo: techName,
+      scheduledDate: targetDate
     });
+
+    setDraggedOrderId(null);
   };
 
-  // Asentajakohtaiset työt
   const myOrders = orders.filter(o => o.assignedTo === selectedTech || !o.assignedTo);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans pb-20">
+    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans pb-20 print:bg-white print:text-black print:pb-0">
       
-      {/* YLÄPALKKI & ROOLINKYTKIN */}
-      <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 sticky top-0 z-20 shadow-lg">
-        <div className="flex justify-between items-center max-w-5xl mx-auto flex-wrap gap-2">
+      {/* YLÄPALKKI (Piilotetaan PDF-tulostuksessa) */}
+      <header className="bg-slate-800 border-b border-slate-700 px-4 py-3 sticky top-0 z-20 shadow-lg print:hidden">
+        <div className="flex justify-between items-center max-w-6xl mx-auto flex-wrap gap-2">
           <div>
             <h1 className="text-xl font-bold text-blue-400">HuoltoPro Cloud</h1>
-            <p className="text-xs text-slate-400">Työnohjaus & Kalenteri</p>
+            <p className="text-xs text-slate-400">Työnohjaus & Viikkosuunnittelu</p>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Valitse asentaja jos asentajaroolissa */}
             {role === 'tech' && (
               <select 
                 value={selectedTech} 
@@ -294,7 +294,6 @@ export default function App() {
               </select>
             )}
 
-            {/* Roolin vaihto */}
             <div className="bg-slate-900 p-1 rounded-lg border border-slate-700 flex text-xs">
               <button 
                 onClick={() => setRole('tech')}
@@ -315,12 +314,10 @@ export default function App() {
 
       {/* --- NÄKYMÄ 1: ASENTAJA --- */}
       {role === 'tech' && (
-        <main className="flex-1 p-4 max-w-md mx-auto w-full space-y-4">
-          
-          {/* Saldokortti */}
+        <main className="flex-1 p-4 max-w-md mx-auto w-full space-y-4 print:hidden">
           <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow flex justify-between items-center">
             <div>
-              <span className="text-xs text-slate-400 uppercase tracking-wider block">Liukumasaldo ({selectedTech.split(' ')[0]})</span>
+              <span className="text-xs text-slate-400 uppercase tracking-wider block">Saldo ({selectedTech.split(' ')[0]})</span>
               <span className="text-2xl font-mono font-bold text-green-400">+{saldoHours} h</span>
             </div>
             <div className="text-right">
@@ -333,114 +330,82 @@ export default function App() {
             </div>
           </div>
 
-          {/* 1. TYÖMÄÄRÄYKSET */}
           {activeTab === 'orders' && (
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Omat työt ({myOrders.length})</h2>
                 <button onClick={() => setActiveTab('newOrder')} className="text-xs bg-blue-600/30 text-blue-300 border border-blue-500/40 px-2.5 py-1 rounded-lg font-semibold">
-                  + Luoda uusi työ
+                  + Uusi työ
                 </button>
               </div>
 
-              {myOrders.length === 0 ? (
-                <div className="text-center py-8 text-xs text-slate-500">Ei osoitettuja töitä. Luo uusi tai pyydä työnjohtajaa lisäämään.</div>
-              ) : (
-                myOrders.map((order) => {
-                  const isRunning = activeTimer && activeTimer.orderId === order.id;
+              {myOrders.map((order) => {
+                const isRunning = activeTimer && activeTimer.orderId === order.id;
 
-                  return (
-                    <div key={order.id} className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs bg-blue-900 text-blue-300 font-bold px-2 py-0.5 rounded">{order.id}</span>
-                            {order.scheduledDate && <span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">📅 {order.scheduledDate}</span>}
-                          </div>
-                          <h3 className="font-bold text-base mt-1 text-white">{order.client}</h3>
-                          <p className="text-xs text-slate-400">📍 {order.address}</p>
+                return (
+                  <div key={order.id} className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs bg-blue-900 text-blue-300 font-bold px-2 py-0.5 rounded">{order.id}</span>
+                          {order.scheduledDate && <span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">📅 {order.scheduledDate}</span>}
                         </div>
-                        <span className={`text-xs px-2 py-0.5 rounded border ${
-                          order.status === 'Valmis' ? 'bg-green-900/40 text-green-300 border-green-500/30' :
-                          order.status === 'Kesken' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
-                          'bg-slate-700 text-slate-400 border-slate-600'
-                        }`}>
-                          {order.status}
-                        </span>
+                        <h3 className="font-bold text-base mt-1 text-white">{order.client}</h3>
+                        <p className="text-xs text-slate-400">📍 {order.address}</p>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded border ${
+                        order.status === 'Valmis' ? 'bg-green-900/40 text-green-300 border-green-500/30' :
+                        order.status === 'Kesken' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
+                        'bg-slate-700 text-slate-400 border-slate-600'
+                      }`}>
+                        {order.status}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-300 bg-slate-900/80 p-2.5 rounded-lg border border-slate-700">
+                      {order.description}
+                    </p>
+
+                    {/* Kuvat */}
+                    <div className="space-y-2 pt-1 border-t border-slate-700/60">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-slate-400 font-semibold">📸 Kuvat ({(order.photos || []).length})</span>
+                        <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-600 font-semibold flex items-center gap-1">
+                          📷 Ota kuva
+                          <input type="file" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(order.id, e)} className="hidden" />
+                        </label>
                       </div>
 
-                      <p className="text-xs text-slate-300 bg-slate-900/80 p-2.5 rounded-lg border border-slate-700">
-                        {order.description}
-                      </p>
-
-                      {/* Kirjatut työt */}
-                      {order.workLogs?.length > 0 && (
-                        <div className="space-y-1 bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/80 text-xs">
-                          <span className="text-slate-400 font-bold block mb-1">📋 Tehdyt kirjaukset:</span>
-                          {order.workLogs.map((log, idx) => (
-                            <div key={idx} className="border-b border-slate-800 pb-1 last:border-0">
-                              <span className="text-blue-300 font-bold">{log.workType}</span> ({log.hours} h) - <span className="text-slate-400">{log.techName || 'Asentaja'}</span>:
-                              {log.endNote && <span className="text-slate-200 block"> Tehty: {log.endNote}</span>}
-                            </div>
+                      {order.photos?.length > 0 && (
+                        <div className="grid grid-cols-3 gap-2 pt-1">
+                          {order.photos.map((imgSrc, idx) => (
+                            <img key={idx} src={imgSrc} alt="Kohdekuva" className="w-full h-20 object-cover rounded-lg border border-slate-700 shadow" />
                           ))}
                         </div>
                       )}
+                    </div>
 
-                      {/* Tarvikkeet & Km */}
-                      {(order.usedMaterials?.length > 0 || order.loggedKm > 0) && (
-                        <div className="text-xs space-y-1 bg-slate-900/40 p-2 rounded border border-slate-700/50 text-slate-400">
-                          {order.loggedKm > 0 && <div>🚗 Matka: <span className="text-slate-200 font-bold">{order.loggedKm} km</span></div>}
-                          {order.usedMaterials?.length > 0 && <div>🛢️ Tarvikkeet: {order.usedMaterials.map(m => `${m.name} (${m.qty} ${m.unit})`).join(', ')}</div>}
-                        </div>
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60">
+                      {!isRunning ? (
+                        <button onClick={() => openStartModal(order.id)} className="bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow">
+                          ▶️ Aloita työ
+                        </button>
+                      ) : (
+                        <button onClick={() => openStopModal(order.id)} className="bg-red-600 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow animate-pulse">
+                          ⏹ Lopeta ({formatTime(activeTimer.seconds)})
+                        </button>
                       )}
 
-                      {/* Kuvat */}
-                      <div className="space-y-2 pt-1 border-t border-slate-700/60">
-                        <div className="flex justify-between items-center">
-                          <span className="text-xs text-slate-400 font-semibold">📸 Kuvat ({(order.photos || []).length})</span>
-                          <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-2.5 py-1 rounded-lg border border-slate-600 font-semibold flex items-center gap-1">
-                            📷 Ota kuva
-                            <input type="file" accept="image/*" capture="environment" onChange={(e) => handlePhotoUpload(order.id, e)} className="hidden" />
-                          </label>
-                        </div>
-
-                        {order.photos?.length > 0 && (
-                          <div className="grid grid-cols-3 gap-2 pt-1">
-                            {order.photos.map((imgSrc, idx) => (
-                              <img key={idx} src={imgSrc} alt="Kohdekuva" className="w-full h-20 object-cover rounded-lg border border-slate-700 shadow" />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Painikkeet */}
-                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60">
-                        {!isRunning ? (
-                          <button onClick={() => openStartModal(order.id)} className="bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow">
-                            ▶️ Aloita työ
-                          </button>
-                        ) : (
-                          <button onClick={() => openStopModal(order.id)} className="bg-red-600 hover:bg-red-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow animate-pulse">
-                            ⏹ Lopeta ({formatTime(activeTimer.seconds)})
-                          </button>
-                        )}
-
-                        {!order.signed ? (
-                          <button onClick={() => handleSignOrder(order.id)} className="bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold py-2.5 rounded-lg text-xs shadow">
-                            ✍️ Kuittaa valmiiksi
-                          </button>
-                        ) : (
-                          <div className="text-center py-2 text-xs text-green-400 font-bold">✓ Kuitattu</div>
-                        )}
-                      </div>
+                      <button onClick={() => setPdfOrder(order)} className="bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold py-2.5 rounded-lg text-xs shadow">
+                        📄 Avaa raportti
+                      </button>
                     </div>
-                  );
-                })
-              )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
-          {/* 2. TARVIKKEET & MATKAT (PALAUTETTU VÄLILEHTI) */}
           {activeTab === 'materials' && (
             <div className="space-y-4">
               <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
@@ -483,7 +448,6 @@ export default function App() {
             </div>
           )}
 
-          {/* 3. UUSI TYÖMÄÄRÄYS (ASENTAJA VOI MYÖS LUODA) */}
           {activeTab === 'newOrder' && (
             <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
               <h2 className="text-sm font-bold text-white uppercase tracking-wider">📝 Luotava uusi työmääräys</h2>
@@ -503,94 +467,115 @@ export default function App() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400 block mb-1">Päivämäärä / Suunniteltu aika</label>
+                  <label className="text-xs text-slate-400 block mb-1">Päivämäärä</label>
                   <input type="date" value={newScheduleDate} onChange={(e) => setNewScheduleDate(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white" />
                 </div>
                 <div>
                   <label className="text-xs text-slate-400 block mb-1">Työn kuvaus</label>
                   <textarea placeholder="Mitä kohteessa pitää tehdä..." value={newDesc} onChange={(e) => setNewDesc(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white h-20" />
                 </div>
-                <button type="submit" className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow">
-                  Tallenna pilveen
-                </button>
+                <button type="submit" className="w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-2.5 rounded-lg text-xs shadow">Tallenna pilveen</button>
               </form>
             </div>
           )}
         </main>
       )}
 
-      {/* --- NÄKYMÄ 2: TYÖNJOHTO (KALENTERI & NÄKYMÄ) --- */}
+      {/* --- NÄKYMÄ 2: TYÖNJOHTO (DRAG & DROP VIIKKOKALENTERI) --- */}
       {role === 'admin' && (
-        <main className="flex-1 p-4 max-w-5xl mx-auto w-full space-y-6">
+        <main className="flex-1 p-4 max-w-7xl mx-auto w-full space-y-6 print:hidden">
           <div className="flex justify-between items-center border-b border-slate-800 pb-4 flex-wrap gap-2">
             <div>
-              <h2 className="text-2xl font-bold text-white">Työnjohdon kalenteri & Valvomo</h2>
-              <p className="text-xs text-slate-400">Aja töitä asentajille ja seuraa edistymistä</p>
+              <h2 className="text-2xl font-bold text-white">Työnjohdon viikkosuunnittelu (Drag & Drop)</h2>
+              <p className="text-xs text-slate-400">Rahaa/vedä työmääräyksiä hiirellä haluamallesi asentajalle ja päivälle</p>
             </div>
 
             <div className="flex items-center gap-2 bg-slate-800 p-2 rounded-xl border border-slate-700">
-              <span className="text-xs text-slate-300 font-bold">📅 Valitse päivä:</span>
+              <span className="text-xs text-slate-300 font-bold">📅 Viikko alkaen:</span>
               <input 
                 type="date" 
-                value={calendarDate} 
-                onChange={(e) => setCalendarDate(e.target.value)}
+                value={selectedWeekDate} 
+                onChange={(e) => setSelectedWeekDate(e.target.value)}
                 className="bg-slate-900 border border-slate-700 rounded-lg p-1.5 text-xs text-white font-bold"
               />
             </div>
           </div>
 
-          {/* KALENTERISUUNNITTELU / ASENTAJIEN SARAKKEET */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider">Töiden jakautuma asentajittain ({calendarDate})</h3>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {TECHS.map((tech) => {
-                const techOrdersForDate = orders.filter(o => o.assignedTo === tech && o.scheduledDate === calendarDate);
+          {/* VIIKKOKALENTERITAULUKKO */}
+          <div className="bg-slate-800 rounded-xl border border-slate-700 shadow overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[1000px]">
+              <thead>
+                <tr className="bg-slate-900 text-xs uppercase text-slate-400 border-b border-slate-700">
+                  <th className="p-3 w-40 border-r border-slate-700">Asentaja</th>
+                  {weekDays.map((dayStr) => (
+                    <th key={dayStr} className="p-2 border-r border-slate-700/60 text-center last:border-0">
+                      <div className="font-bold text-slate-200">{new Date(dayStr).toLocaleDateString('fi-FI', { weekday: 'short' })}</div>
+                      <div className="text-[10px] text-slate-500">{dayStr}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/60 text-xs">
+                {TECHS.map((tech) => (
+                  <tr key={tech} className="min-h-[100px]">
+                    <td className="p-3 font-bold text-white bg-slate-850 border-r border-slate-700 align-top">
+                      👷 {tech}
+                    </td>
 
-                return (
-                  <div key={tech} className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow space-y-3">
-                    <div className="flex justify-between items-center border-b border-slate-700 pb-2">
-                      <span className="font-bold text-white text-sm">👷 {tech}</span>
-                      <span className="text-xs bg-blue-900/60 text-blue-300 px-2 py-0.5 rounded font-bold">{techOrdersForDate.length} työtä</span>
-                    </div>
+                    {weekDays.map((dayStr) => {
+                      const dayOrders = orders.filter(o => o.assignedTo === tech && o.scheduledDate === dayStr);
 
-                    {techOrdersForDate.length === 0 ? (
-                      <div className="text-center py-6 text-xs text-slate-500">Ei töitä tälle päivälle.</div>
-                    ) : (
-                      techOrdersForDate.map(o => (
-                        <div key={o.id} className="bg-slate-900 p-3 rounded-lg border border-slate-700 space-y-1">
-                          <div className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-blue-400">{o.id}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                              o.status === 'Valmis' ? 'bg-green-900/40 text-green-300 border-green-500/30' :
-                              o.status === 'Kesken' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
-                              'bg-slate-800 text-slate-400 border-slate-700'
-                            }`}>{o.status}</span>
+                      return (
+                        <td 
+                          key={dayStr} 
+                          onDragOver={handleDragOver}
+                          onDrop={(e) => handleDrop(e, tech, dayStr)}
+                          className="p-1.5 border-r border-slate-700/60 align-top hover:bg-slate-750/50 transition min-h-[100px] last:border-0"
+                        >
+                          <div className="space-y-1.5 min-h-[80px]">
+                            {dayOrders.map((o) => (
+                              <div
+                                key={o.id}
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, o.id)}
+                                onClick={() => setPdfOrder(o)}
+                                className="bg-slate-900 hover:bg-slate-950 p-2 rounded-lg border border-slate-700 cursor-grab active:cursor-grabbing shadow space-y-1"
+                              >
+                                <div className="flex justify-between items-center">
+                                  <span className="font-mono font-bold text-blue-400 text-[10px]">{o.id}</span>
+                                  <span className={`text-[9px] px-1 rounded ${
+                                    o.status === 'Valmis' ? 'bg-green-900/50 text-green-300' :
+                                    o.status === 'Kesken' ? 'bg-amber-500/20 text-amber-300' :
+                                    'bg-slate-800 text-slate-400'
+                                  }`}>{o.status}</span>
+                                </div>
+                                <div className="font-bold text-white text-[11px] truncate">{o.client}</div>
+                                <div className="text-[10px] text-slate-400 truncate">📍 {o.address}</div>
+                              </div>
+                            ))}
                           </div>
-                          <div className="font-bold text-xs text-white">{o.client}</div>
-                          <div className="text-[11px] text-slate-400">📍 {o.address}</div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          {/* TAULUKKO KAIKISTA TÖISTÄ */}
-          <div className="bg-slate-800 rounded-xl border border-slate-700 shadow overflow-hidden space-y-3 p-4">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Kaikki tietokannan työmääräykset</h3>
+          {/* TAULUKKO KAIKISTA TÖISTÄ (Klikkaamalla avaa PDF-raportin) */}
+          <div className="bg-slate-800 rounded-xl border border-slate-700 shadow p-4 space-y-3">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Kaikki työmääräykset (Klikkaa riviä avataksesi PDF-raportin)</h3>
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse min-w-[600px]">
+              <table className="w-full text-left border-collapse min-w-[700px]">
                 <thead>
-                  <tr className="bg-slate-900/80 text-xs uppercase text-slate-400 border-b border-slate-700">
+                  <tr className="bg-slate-900 text-xs uppercase text-slate-400 border-b border-slate-700">
                     <th className="p-2.5">ID & Pvm</th>
                     <th className="p-2.5">Asiakas</th>
                     <th className="p-2.5">Asentaja</th>
                     <th className="p-2.5">Tila</th>
                     <th className="p-2.5">Tunnit</th>
-                    <th className="p-2.5">Tarvikkeet</th>
+                    <th className="p-2.5">Toiminto</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-700/60 text-xs">
@@ -598,7 +583,7 @@ export default function App() {
                     const totalHours = (o.workLogs || []).reduce((sum, l) => sum + (l.hours || 0), 0);
 
                     return (
-                      <tr key={o.id} className="hover:bg-slate-750">
+                      <tr key={o.id} className="hover:bg-slate-700/50 cursor-pointer" onClick={() => setPdfOrder(o)}>
                         <td className="p-2.5 font-mono">
                           <span className="font-bold text-blue-400 block">{o.id}</span>
                           <span className="text-[10px] text-slate-400">{o.scheduledDate || 'Ei pvm'}</span>
@@ -618,8 +603,10 @@ export default function App() {
                           </span>
                         </td>
                         <td className="p-2.5 font-mono font-bold text-amber-300">{totalHours} h</td>
-                        <td className="p-2.5 text-slate-300">
-                          {o.usedMaterials?.length > 0 ? o.usedMaterials.map(m => `${m.name} (${m.qty}kpl)`).join(', ') : '-'}
+                        <td className="p-2.5">
+                          <button onClick={(e) => { e.stopPropagation(); setPdfOrder(o); }} className="bg-blue-600/30 text-blue-300 border border-blue-500/40 px-2.5 py-1 rounded text-[11px] font-semibold">
+                            📄 Avaa PDF
+                          </button>
                         </td>
                       </tr>
                     );
@@ -631,9 +618,115 @@ export default function App() {
         </main>
       )}
 
-      {/* --- MODAL 1: ALOITA TYÖ --- */}
+      {/* --- MODAL 3: TÄYDELLINEN PDF-TYÖRAPORTTI (TULOSTA / TALLENNA PDF) --- */}
+      {pdfOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 print:p-0 print:bg-white print:static print:block">
+          <div className="bg-white text-slate-900 rounded-xl p-6 max-w-2xl w-full space-y-4 shadow-2xl overflow-y-auto max-h-[90vh] print:max-h-none print:shadow-none print:border-0 print:w-full">
+            
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-slate-300 pb-4">
+              <div>
+                <h2 className="text-2xl font-bold text-blue-900">HUOLTOPRO - TYÖRAPORTTI</h2>
+                <p className="text-xs text-slate-600">TyömääräysID: <span className="font-mono font-bold text-slate-900">{pdfOrder.id}</span></p>
+              </div>
+              <div className="text-right">
+                <span className="text-xs text-slate-500 block">Päivämäärä</span>
+                <span className="font-bold text-sm text-slate-800">{pdfOrder.scheduledDate || new Date().toISOString().split('T')[0]}</span>
+              </div>
+            </div>
+
+            {/* Asiakas- ja Asentajatiedot */}
+            <div className="grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs">
+              <div>
+                <span className="text-slate-500 font-bold block uppercase">Asiakas / Kohde</span>
+                <strong className="text-slate-900 text-sm block">{pdfOrder.client}</strong>
+                <span className="text-slate-600">{pdfOrder.address}</span>
+              </div>
+              <div>
+                <span className="text-slate-500 font-bold block uppercase">Vastuuhenkilö / Asentaja</span>
+                <strong className="text-slate-900 text-sm block">{pdfOrder.assignedTo || 'Ei osoitettu'}</strong>
+                <span className="text-slate-600">Tila: {pdfOrder.status}</span>
+              </div>
+            </div>
+
+            {/* Työn kuvaus */}
+            <div>
+              <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Työtehtävä / Kuvaus</h4>
+              <p className="text-xs text-slate-800 bg-slate-50 p-2.5 rounded border border-slate-200">{pdfOrder.description}</p>
+            </div>
+
+            {/* Tehdyt työt ja tunnit */}
+            <div>
+              <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Tehdyt kirjaukset ja tunnit</h4>
+              {pdfOrder.workLogs?.length > 0 ? (
+                <table className="w-full text-left text-xs border border-slate-200">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="p-2 border-b">Laatu</th>
+                      <th className="p-2 border-b">Selite</th>
+                      <th className="p-2 border-b text-right">Tunnit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pdfOrder.workLogs.map((log, i) => (
+                      <tr key={i} className="border-b border-slate-100">
+                        <td className="p-2 font-bold">{log.workType}</td>
+                        <td className="p-2">{log.endNote || log.startNote || '-'}</td>
+                        <td className="p-2 text-right font-mono font-bold">{log.hours} h</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <p className="text-xs text-slate-400 italic">Ei kirjattuja tunteja.</p>}
+            </div>
+
+            {/* Tarvikkeet & Kilometrit */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Käytetyt tarvikkeet</h4>
+                {pdfOrder.usedMaterials?.length > 0 ? (
+                  <ul className="text-xs list-disc list-inside bg-slate-50 p-2 rounded border border-slate-200">
+                    {pdfOrder.usedMaterials.map((m, i) => <li key={i}>{m.name} - <strong>{m.qty} {m.unit}</strong></li>)}
+                  </ul>
+                ) : <p className="text-xs text-slate-400 italic">Ei tarvikkeita.</p>}
+              </div>
+
+              <div>
+                <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Matkat</h4>
+                <p className="text-xs bg-slate-50 p-2 rounded border border-slate-200 font-bold">
+                  🚗 Ajetut kilometrit: {pdfOrder.loggedKm || 0} km
+                </p>
+              </div>
+            </div>
+
+            {/* Kuvat */}
+            {pdfOrder.photos?.length > 0 && (
+              <div>
+                <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Valokuvat kohteesta</h4>
+                <div className="grid grid-cols-3 gap-2">
+                  {pdfOrder.photos.map((img, i) => (
+                    <img key={i} src={img} alt="Valokuva" className="w-full h-24 object-cover rounded border border-slate-300" />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Painikkeet modalissa (Piilotetaan tulostettaessa) */}
+            <div className="flex gap-2 pt-4 border-t border-slate-200 print:hidden">
+              <button onClick={() => setPdfOrder(null)} className="flex-1 bg-slate-200 text-slate-800 py-2 rounded-lg text-xs font-bold">
+                Sulje
+              </button>
+              <button onClick={() => window.print()} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-xs font-bold shadow">
+                🖨️ Tulosta / Tallenna PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 1: ALOITA TYÖ */}
       {startModalOrder && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 print:hidden">
           <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl">
             <h3 className="text-base font-bold text-white border-b border-slate-700 pb-2">▶️ Aloita työ: {startModalOrder}</h3>
             <form onSubmit={confirmStartWork} className="space-y-3">
@@ -644,7 +737,6 @@ export default function App() {
                   <option value="Korjaamotyö">🔧 Korjaamotyö</option>
                   <option value="Matka / Ajo">🚗 Matka / Ajo</option>
                   <option value="Huolto">🛢️ Huolto</option>
-                  <option value="Vianetsintä">🔍 Vianetsintä</option>
                 </select>
               </div>
               <div className="flex gap-2 pt-2">
@@ -656,9 +748,9 @@ export default function App() {
         </div>
       )}
 
-      {/* --- MODAL 2: LOPETA TYÖ --- */}
+      {/* MODAL 2: LOPETA TYÖ */}
       {stopModalOrder && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 print:hidden">
           <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <h3 className="text-base font-bold text-white border-b border-slate-700 pb-2">⏹ Lopeta työ: {stopModalOrder}</h3>
             <form onSubmit={confirmStopWork} className="space-y-3">
@@ -697,9 +789,9 @@ export default function App() {
         </div>
       )}
 
-      {/* NAVIGAATIO (ASENTAJA-MOBIILI) */}
+      {/* NAVIGAATIO (MOBIILI) */}
       {role === 'tech' && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 flex justify-around p-2 z-20 shadow-2xl">
+        <nav className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 flex justify-around p-2 z-20 shadow-2xl print:hidden">
           <button onClick={() => setActiveTab('orders')} className={`flex-1 py-1.5 text-center text-xs font-semibold flex flex-col items-center ${activeTab === 'orders' ? 'text-blue-400' : 'text-slate-400'}`}>📋 Työt</button>
           <button onClick={() => setActiveTab('materials')} className={`flex-1 py-1.5 text-center text-xs font-semibold flex flex-col items-center ${activeTab === 'materials' ? 'text-blue-400' : 'text-slate-400'}`}>🛢️ Tarvikkeet</button>
           <button onClick={() => setActiveTab('newOrder')} className={`flex-1 py-1.5 text-center text-xs font-semibold flex flex-col items-center ${activeTab === 'newOrder' ? 'text-blue-400' : 'text-slate-400'}`}>📝 Uusi työ</button>
